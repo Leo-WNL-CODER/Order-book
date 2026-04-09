@@ -1,7 +1,8 @@
 //optimization checks 
 ----------code repetition---->write a function
 
-right now i am writing a program to handle the buy orders 
+
+#right now writing a program to handle the buy orders 
 
 --------------------
 Buyer order handling
