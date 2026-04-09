@@ -1,6 +1,6 @@
 //optimization checks 
 ----------code repetition---->write a function
-
+----------check the price is valid for the given tick size
 
 #right now writing a program to handle the buy orders 
 
@@ -14,10 +14,9 @@ Buyer order handling
         |
         |--no--->fetch the min ask
             |
-            |---->if min_ask <= current bid 
-                |
-                |--->loop starts at that price level
+            |---->loop starts if min_ask <= current bid  at that price level
             |
-            |---->if min ask>current bid
+            |---->if the remaining buy quantity is not equal to zero 
                 |
-                |--->store the current bid in the BUY ORDER LIST
+                |->store the remaining quant in the buy order list
+        
