@@ -1,8 +1,9 @@
 //optimization checks 
 ----------code repetition---->write a function
 ----------check the price is valid for the given tick size
-
+-----------------------
 #right now writing a program to handle the buy orders 
+---------------------------
 
 --------------------
 Buyer order handling
@@ -19,4 +20,19 @@ Buyer order handling
             |---->if the remaining buy quantity is not equal to zero 
                 |
                 |->store the remaining quant in the buy order list
+--------------------
+Sell order handling
+--------------------
+
+    ---->checking if the buyer order list is empty
+        |
+        |--yes-->then just push the order in the seller list 
+        |
+        |--no--->fetch the max bid
+            |
+            |---->loop starts if max_bid >= current ask  at that price level
+            |
+            |---->if the remaining sell quantity is not equal to zero 
+                |
+                |->store the remaining quant in the sell order list
         

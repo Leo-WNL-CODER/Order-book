@@ -94,12 +94,12 @@ impl LimitOrderBook {
         if order_meta.quantity<=0 {
             return Err(CustomError::InvalidQuantity)
         }
-        let buyer_quantity=order_meta.quantity;
+        let user_quant=order_meta.quantity;
         match order_type{
             OrderType::BUY=>{
                 println!("sdada");
                 if !self.ask.is_empty(){    
-                    let mut remaining_qauntity=buyer_quantity;
+                    let mut remaining_qauntity=user_quant;
             
                 
                 loop{
@@ -121,7 +121,7 @@ impl LimitOrderBook {
                     }
 
                     if ask_total_quantity>remaining_qauntity{
-                        
+                        seller_price_level.total_quantity-=remaining_qauntity;
                         let mut counted_quantity:u64=remaining_qauntity;
 
                         let seller_queue=&mut seller_price_level.vec_level;
@@ -165,6 +165,7 @@ impl LimitOrderBook {
                         remaining_qauntity=0;
                         break;
                     }else if ask_total_quantity==remaining_qauntity{
+                        seller_price_level.total_quantity-=0;
 
                         ask_total_quantity=0;
                         remaining_qauntity=0;
@@ -175,6 +176,7 @@ impl LimitOrderBook {
                         break;
                     }else{//if buy_qunt>ask_total_qunt 
                         //write the logic to change the variables and move  to the next level
+                        seller_price_level.total_quantity-=0;
                     
                         let Some( price_lvl)=&mut self.ask.pop_first()else{
                             return Err(CustomError::ErrorFetchingAskLevel);
@@ -206,7 +208,10 @@ impl LimitOrderBook {
                             let new_order=Order::new(order_id,*order_meta);
     
                             let level=self.buy.entry(price)
-                            .or_insert_with(||PriceLevel::new(order_meta.quantity, DEFAULT_LEVEL_CAPACITY));
+                            .or_insert_with(||PriceLevel::new(remaining_qauntity, DEFAULT_LEVEL_CAPACITY));
+
+                            level.vec_level.push_back(new_order);
+
                         
                         }
                 }
@@ -237,6 +242,150 @@ impl LimitOrderBook {
             },
             OrderType::SELL=>{
 
+                println!("sell");
+                if !self.buy.is_empty(){    
+                    let mut remaining_qauntity=user_quant;
+            
+                
+                loop{
+
+                    let Some(buy)=&mut self.buy.last_entry() else{
+                        return Err(CustomError::ErrorFetchingbuyLevel);
+                    };
+                    let mut max_buy=*buy.key();
+                    let buy_price_level=buy.get_mut();
+                    
+                    let mut buy_total_quantity=buy_price_level.total_quantity;
+                    
+                    let mut removed_buys_order: VecDeque<Order>=VecDeque::with_capacity(DEFAULT_LEVEL_CAPACITY);//storing all the aks orders that
+                    //are used to fill the buy order
+                    if max_buy<price{
+                        break;
+                    }
+
+                    if buy_total_quantity>remaining_qauntity{
+                        
+                        buy_price_level.total_quantity-=remaining_qauntity;
+                        let mut counted_quantity:u64=remaining_qauntity;
+
+                        let buyer_queue=&mut buy_price_level.vec_level;
+                        //looping through the vecdeque at current price to get the orders that fill the buy price 
+                        loop {
+                            println!("hhhh---{:?}",buyer_queue);
+                            let Some(front)=buyer_queue.front_mut()else{
+                                return Err(CustomError::ErrorFetchingVecDeque);
+                            };
+
+                            let mut current_order_quant=front.order_metadata.quantity;
+                            
+                            if current_order_quant>counted_quantity{
+                                current_order_quant-=counted_quantity;
+                            
+                                front.order_metadata.quantity=current_order_quant;
+                                
+                                removed_buys_order.push_back(Order { 
+                                    order_id: front.order_id,
+                                    order_metadata:OrderMetadata { quantity:counted_quantity,
+                                        ..front.order_metadata} 
+                                });
+                                println!("here");
+                                break;
+
+                            }else if current_order_quant==counted_quantity{
+
+                                if let Some(remove_order)=buyer_queue.pop_front(){
+                                    removed_buys_order.push_back(remove_order);
+                                };
+                                break;
+                            }else{
+                                //here we have to remove the  the front order from level and store in removed buys vec
+                                if let Some(remove_order)=buyer_queue.pop_front(){
+                                    counted_quantity-=remove_order.order_metadata.quantity;
+                                    removed_buys_order.push_back(remove_order);
+                                };
+                            }
+                            
+
+                        }
+                        buy_total_quantity-=remaining_qauntity;
+                        remaining_qauntity=0;
+                        break;
+                    }else if buy_total_quantity==remaining_qauntity{
+                        buy_price_level.total_quantity-=remaining_qauntity;
+
+                        buy_total_quantity=0;
+                        remaining_qauntity=0;
+                        let Some(mut price_lvl)=self.buy.pop_last()else{
+                            return Err(CustomError::ErrorFetchingbuyLevel);
+                        };
+                        removed_buys_order.append(&mut price_lvl.1.vec_level);
+                        break;
+                    }else{//if ask_qunt>buy_total_qunt 
+                        //write the logic to change the variables and move  to the next level
+                        buy_price_level.total_quantity-=0;
+                    
+                        let Some( price_lvl)=&mut self.buy.pop_last()else{
+                            return Err(CustomError::ErrorFetchingbuyLevel);
+                        };
+                        removed_buys_order.append(&mut price_lvl.1.vec_level);
+                        
+
+                        remaining_qauntity-=buy_total_quantity;
+                        // buy_total_quantity=0;
+                    }
+
+
+                }
+
+                if remaining_qauntity>0{
+                    if self.ask.contains_key(&price){
+
+                        if let Some(current_price_level)=self.ask.get_mut(&price){
+                            current_price_level.total_quantity+=remaining_qauntity;
+                            
+                            let new_order_meta=OrderMetadata{quantity:remaining_qauntity,..*order_meta};
+                            
+                            let new_order=Order::new(order_id,new_order_meta);
+    
+                            current_price_level.vec_level.push_back(new_order);
+    
+                        };
+                        }else{
+                            let new_order=Order::new(order_id,*order_meta);
+    
+                            let level=self.ask.entry(price)
+                            .or_insert_with(||PriceLevel::new(remaining_qauntity, DEFAULT_LEVEL_CAPACITY));
+    
+                            level.vec_level.push_back(new_order);
+
+                        
+                        }
+                }
+                }else{
+                    // if sellers queue is empty
+                    if self.buy.contains_key(&price){
+
+                       if let Some(current_price_level)=self.ask.get_mut(&price){
+                           current_price_level.total_quantity+=order_meta.quantity;
+
+                           let new_order=Order::new(order_id,*order_meta);
+
+                           current_price_level.vec_level.push_back(new_order);
+
+                       };
+                    }else{
+                        let new_order=Order::new(order_id,*order_meta);
+
+                        let level=self.ask.entry(price)
+                        .or_insert_with(||PriceLevel::new(order_meta.quantity, DEFAULT_LEVEL_CAPACITY));
+                         
+                         level.vec_level.push_back(new_order);
+                        println!("pushed in buyorder list")
+                    }
+
+                };
+
+            
             }
         }
 
@@ -244,46 +393,157 @@ impl LimitOrderBook {
 
     }   
 
-    fn print_order_book(&self){
-        print!("{:?}",&self);
+    pub fn print_summary(&self) {
+        println!("\n================ ORDER BOOK ================");
+
+        println!("\n------------- ASKS -------------");
+        for (price, level) in self.ask.iter().rev() {
+            println!("Price: {:<10} | Total Qty: {}", price, level.total_quantity);
+        }
+
+        println!("\n------------- BIDS -------------");
+        for (price, level) in self.buy.iter().rev() {
+            println!("Price: {:<10} | Total Qty: {}", price, level.total_quantity);
+        }
+
+        println!("============================================\n");
+    }
+
+    pub fn print_detailed(&self) {
+        println!("\n================ ORDER BOOK (DETAILED) ================");
+
+        println!("\n------------- ASKS -------------");
+        for (price, level) in &self.ask {
+            println!("Price: {} | Total Qty: {}", price, level.total_quantity);
+
+            for order in &level.vec_level {
+                println!(
+                    "   OrderID: {} | Qty: {} | User: {} | Time: {} | Type: {:?}",
+                    order.order_id,
+                    order.order_metadata.quantity,
+                    order.order_metadata.user_id,
+                    order.order_metadata.time,
+                    order.order_metadata.order_type
+                );
+            }
+        }
+
+        println!("\n------------- BIDS -------------");
+        for (price, level) in &self.buy {
+            println!("Price: {} | Total Qty: {}", price, level.total_quantity);
+
+            for order in &level.vec_level {
+                println!(
+                    "   OrderID: {} | Qty: {} | User: {} | Time: {} | Type: {:?}",
+                    order.order_id,
+                    order.order_metadata.quantity,
+                    order.order_metadata.user_id,
+                    order.order_metadata.time,
+                    order.order_metadata.order_type
+                );
+            }
+        }
+
+        println!("=======================================================\n");
     }
 }
 
 fn main() {
 
+    let mut order_book = LimitOrderBook::new(5);
 
-
-    let mut order_book=LimitOrderBook::new(5);
-
-    let mut order_meta=OrderMetadata { quantity: 5, order_type: OrderType::BUY, time: Utc::now(), user_id: 2313123 };
-    match order_book.execute_order(100, 312311213, &mut order_meta){
-        Ok(_)=>{
-            order_book.print_order_book();
-        },
-        Err(e)=>{
-            println!("{:?}",e);
-        }
-    };
-    let mut order_meta=OrderMetadata { quantity: 9, order_type: OrderType::BUY, time: Utc::now(), user_id: 213131 };
-    match order_book.execute_order(100, 2222, &mut order_meta){
-        Ok(_)=>{
-            order_book.print_order_book();
-        },
-        Err(e)=>{
-            println!("{:?}",e);
-        }
+    // BUY 1
+    let mut order_meta = OrderMetadata {
+        quantity: 5,
+        order_type: OrderType::BUY,
+        time: Utc::now(),
+        user_id: 2313123
     };
 
+    order_book.execute_order(100, 312311213, &mut order_meta).unwrap();
 
-    println!("Hello, world!");
+
+    // BUY 2
+    let mut order_meta = OrderMetadata {
+        quantity: 9,
+        order_type: OrderType::BUY,
+        time: Utc::now(),
+        user_id: 213131
+    };
+
+    order_book.execute_order(100, 2222, &mut order_meta).unwrap();
+
+
+    // SELL 1
+    let mut order_meta = OrderMetadata {
+        quantity: 7,
+        order_type: OrderType::SELL,
+        time: Utc::now(),
+        user_id: 88888
+    };
+
+    order_book.execute_order(105, 4444, &mut order_meta).unwrap();
+
+
+    // SELL 2
+    let mut order_meta = OrderMetadata {
+        quantity: 3,
+        order_type: OrderType::SELL,
+        time: Utc::now(),
+        user_id: 99999
+    };
+
+    order_book.execute_order(104, 5555, &mut order_meta).unwrap();
+
+
+    order_book.print_summary();
+    // order_book.print_detailed();
+    // selling
+    println!("status before");
+
+    let mut order_meta = OrderMetadata {
+        quantity: 15,
+        order_type: OrderType::SELL,
+        time: Utc::now(),
+        user_id: 77777
+    };
+    
+    match order_book.execute_order(100, 6666, &mut order_meta) {
+        Ok(_) => {
+            println!("after selling 6-100");
+            order_book.print_summary();
+        },
+        Err(e) => {
+            println!("{:?}", e);
+        }
+    };
+    // buying
+    let mut order_meta = OrderMetadata {
+        quantity: 8,
+        order_type: OrderType::BUY,
+        time: Utc::now(),
+        user_id: 55555
+    };
+    
+    match order_book.execute_order(104, 7777, &mut order_meta) {
+        Ok(_) => {
+            println!("after buying 8-104");
+            order_book.print_summary();
+        },
+        Err(e) => {
+            println!("{:?}", e);
+        }
+    };
+    // order_book.print_summary();
+    // order_book.print_detailed();
 }
-
 #[derive(Debug)]
 enum CustomError{
     InvalidPrice,
     InvalidQuantity,
     InvalidOrderType,
     ErrorFetchingAskLevel,
+    ErrorFetchingbuyLevel,
     ErrorFetchingVecDeque
 }
 
