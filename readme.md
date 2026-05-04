@@ -46,3 +46,7 @@ Now the question may arise that it can cause slippage as it has to go through an
 but here is the catch the conversion takes same amount of time inside the matching engine and in the api gateway.So if we keep the conversions inside the engine which will be running on the single thread and If the engine stops to parse a JSON string, extract an f64, multiply it, and round it, it takes (for example) 50 nanoseconds.
 If 10,000 orders arrive at the exact same time, the 10,000th order has to wait for the engine to do that float math 9,999 times before it finally gets matched. That queue buildup will cause massive slippage. so the 10000th order will likely take 10000*50 ns which will cause slippage.
 
+
+----------------
+feature to add ----#cancellation of orders--->using hashmap for that
+--

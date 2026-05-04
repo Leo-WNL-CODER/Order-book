@@ -97,5 +97,16 @@ fn main() {
         }
     };
 
+    println!("status before cancellation");
+    
+    // Cancel the order with user_id 99999 (which is order_id 5555, qty 3 @ 1045 SELL)
+    match order_book.cancel_order(5555) {
+        Ok(_) => println!("Successfully cancelled order 5555 (Qty 3 @ 104.5)"),
+        Err(e) => println!("Error cancelling order 5555: {:?}", e),
+    }
+
+    println!("status after cancellation");
+    order_book.print_summary();
+
     order_book.print_detailed();
 }

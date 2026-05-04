@@ -1,385 +1,347 @@
-use std::{ collections::{BTreeMap, VecDeque, btree_map::Entry}, thread::{current, sleep}, time::{SystemTime, UNIX_EPOCH}};
-
+use std::collections::{BTreeMap, HashMap};
 use chrono::{DateTime, Utc};
 
-const COUNTER:u64=0;
-const DEFAULT_LEVEL_CAPACITY: usize = 32;
-
-#[derive(PartialEq,Debug,Clone, Copy)]
-pub enum OrderType{
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum OrderType {
     BUY,
-    SELL
+    SELL,
 }
 
-#[derive(Debug,Clone, Copy)]
-pub struct OrderMetadata{
-    pub quantity:u64,
-    pub order_type:OrderType,
-    pub time:DateTime<Utc>,
-    pub user_id:u64
+#[derive(Debug, Clone, Copy)]
+pub struct OrderMetadata {
+    pub quantity: u64,
+    pub order_type: OrderType,
+    pub time: DateTime<Utc>,
+    pub user_id: u64,
 }
-impl OrderMetadata{
-    pub fn new( quantity:u64,order_type:OrderType,
-        time:DateTime<Utc>,user_id:u64)->Self{
-            OrderMetadata {quantity, order_type, time, user_id }
+
+impl OrderMetadata {
+    pub fn new(quantity: u64, order_type: OrderType, time: DateTime<Utc>, user_id: u64) -> Self {
+        OrderMetadata { quantity, order_type, time, user_id }
     }
 }
 
-#[derive(Debug,Clone, Copy)]
-pub struct Order{
-    pub order_id:u64,
-    pub order_metadata:OrderMetadata
+#[derive(Debug, Clone, Copy)]
+pub struct Order {
+    pub order_id: u64,
+    pub order_metadata: OrderMetadata,
 }
 
 impl Order {
-    pub fn new(order_id:u64,order_metadata:OrderMetadata)->Self{
-
-            Order{
-                order_id,
-                order_metadata
-            }
-
+    pub fn new(order_id: u64, order_metadata: OrderMetadata) -> Self {
+        Order { order_id, order_metadata }
     }
 }
 
-#[derive(Clone,Debug)]
-pub struct PriceLevel{
-    pub vec_level:VecDeque<Order>,
-    pub total_quantity:u64
+#[derive(Debug, Clone, Copy)]
+pub struct OrderNode {
+    pub order: Order,
+    pub prev: Option<usize>,
+    pub next: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PriceLevel {
+    pub head: Option<usize>,
+    pub tail: Option<usize>,
+    pub total_quantity: u64,
 }
 
 impl PriceLevel {
-    pub fn new(total_quantity:u64,capacity: usize) -> Self {
+    pub fn new() -> Self {
         Self {
-            vec_level: VecDeque::with_capacity(capacity),
-            total_quantity,
+            head: None,
+            tail: None,
+            total_quantity: 0,
         }
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct OrderLocation {
+    pub index: usize,
+    pub price: u64,
+    pub order_type: OrderType,
+}
 
 #[derive(Debug)]
-pub struct LimitOrderBook{
-    pub multiplier:u64,
-    pub tick_size:u64,
-    pub buy:BTreeMap<u64,PriceLevel>,//Btremap<price,pricelevel queue=> this represents the
-    //  total number of orders at the particular price>
-    pub ask:BTreeMap<u64,PriceLevel>
+pub enum CustomError {
+    InvalidPrice,
+    InvalidQuantity,
+    InvalidOrderType,
+    OrderNotFound,
+    ErrorFetchingAskLevel,
+    ErrorFetchingBuyLevel,
+    ErrorFetchingVecDeque,
+    NegativeTickSize,
+}
+
+#[derive(Debug)]
+pub struct LimitOrderBook {
+    pub multiplier: u64,
+    pub tick_size: u64,
+    pub buy: BTreeMap<u64, PriceLevel>,
+    pub ask: BTreeMap<u64, PriceLevel>,
+    pub orders_pool: Vec<OrderNode>,
+    pub free_list: Vec<usize>,
+    pub orders_map: HashMap<u64, OrderLocation>,
 }
 
 impl LimitOrderBook {
-    pub fn new(tick_size:u64,multiplier:u64)->Self{
-
-      
-        let ask: BTreeMap<u64, PriceLevel>=BTreeMap::new();
-        let buy: BTreeMap<u64, PriceLevel>=BTreeMap::new();
-
-        Self { tick_size, buy, ask,multiplier }
+    pub fn new(tick_size: u64, multiplier: u64) -> Self {
+        Self {
+            tick_size,
+            buy: BTreeMap::new(),
+            ask: BTreeMap::new(),
+            multiplier,
+            orders_pool: Vec::with_capacity(10000),
+            free_list: Vec::new(),
+            orders_map: HashMap::new(),
+        }
     }
 
-    pub fn execute_order(&mut self,price:u64,order_id:u64,order_meta:&mut OrderMetadata)->Result<String,CustomError>{
+    fn allocate_node(&mut self, order: Order, price: u64) -> usize {
+        let index = if let Some(idx) = self.free_list.pop() {
+            self.orders_pool[idx] = OrderNode { order, prev: None, next: None };
+            idx
+        } else {
+            let idx = self.orders_pool.len();
+            self.orders_pool.push(OrderNode { order, prev: None, next: None });
+            idx
+        };
+        self.orders_map.insert(order.order_id, OrderLocation {
+            index,
+            price,
+            order_type: order.order_metadata.order_type,
+        });
+        index
+    }
 
-        if price%self.tick_size!=0{
-            return Err(CustomError::InvalidPrice)
+    fn free_node(&mut self, index: usize) {
+        let id = self.orders_pool[index].order.order_id;
+        self.orders_map.remove(&id);
+        self.free_list.push(index);
+    }
+
+    fn append_to_level(&mut self, price: u64, order_type: OrderType, order_id: u64, meta: OrderMetadata) {
+        let order = Order::new(order_id, meta);
+        let qty = meta.quantity;
+        let index = self.allocate_node(order, price);
+
+        let level = match order_type {
+            OrderType::BUY => self.buy.entry(price).or_insert_with(PriceLevel::new),
+            OrderType::SELL => self.ask.entry(price).or_insert_with(PriceLevel::new),
+        };
+
+        match level.tail {
+            Some(tail_idx) => {
+                self.orders_pool[tail_idx].next = Some(index);
+                self.orders_pool[index].prev = Some(tail_idx);
+                level.tail = Some(index);
+            }
+            None => {
+                level.head = Some(index);
+                level.tail = Some(index);
+            }
+        }
+        level.total_quantity += qty;
+    }
+
+    pub fn cancel_order(&mut self, order_id: u64) -> Result<(), CustomError> {
+        let loc = match self.orders_map.get(&order_id).copied() {
+            Some(l) => l,
+            None => return Err(CustomError::OrderNotFound),
+        };
+
+        let node = self.orders_pool[loc.index];
+        let qty = node.order.order_metadata.quantity;
+
+        // Unlink from Doubly Linked List
+        if let Some(prev) = node.prev {
+            self.orders_pool[prev].next = node.next;
+        }
+        if let Some(next) = node.next {
+            self.orders_pool[next].prev = node.prev;
         }
 
-        if order_meta.order_type!=OrderType::BUY&& order_meta.order_type!=OrderType::SELL {
-            return Err(CustomError::InvalidOrderType)
-        }
+        let levels = match loc.order_type {
+            OrderType::BUY => &mut self.buy,
+            OrderType::SELL => &mut self.ask,
+        };
 
-        if order_meta.quantity<=0 {
-            return Err(CustomError::InvalidQuantity)
-        }
-        let user_quant=order_meta.quantity;
-        match order_meta.order_type{
-            OrderType::BUY=>{
-                    let mut remaining_qauntity=user_quant;
-            
-                
-                loop{
+        if let Some(level) = levels.get_mut(&loc.price) {
+            level.total_quantity -= qty;
 
-                    if self.ask.is_empty(){
-                        break;
-                    }
+            if level.head == Some(loc.index) {
+                level.head = node.next;
+            }
+            if level.tail == Some(loc.index) {
+                level.tail = node.prev;
+            }
 
-                    let Some(mut ask)= self.ask.first_entry() else{
-                        println!("dsad");
-                        return Err(CustomError::ErrorFetchingAskLevel);
-                    };
-                    let minimum_ask=*ask.key();
-                    let seller_price_level=ask.get_mut();
-                    
-                    let mut ask_total_quantity=seller_price_level.total_quantity;
-                    
-                    let mut removed_asks_order: VecDeque<Order>=VecDeque::with_capacity(DEFAULT_LEVEL_CAPACITY);//storing all the aks orders that
-                    //are used to fill the buy order
-    
-    
-                    if minimum_ask>price{
-                        break;
-                    }
-
-                    if ask_total_quantity>remaining_qauntity{
-                        seller_price_level.total_quantity-=remaining_qauntity;
-                        let mut counted_quantity:u64=remaining_qauntity;
-
-                        let seller_queue=&mut seller_price_level.vec_level;
-                        //looping through the vecdeque at current price to get the orders that fill the buy price 
-                        loop {
-                            let Some(front)=seller_queue.front_mut()else{
-                                return Err(CustomError::ErrorFetchingVecDeque);
-                            };
-
-                            let mut current_order_quant=front.order_metadata.quantity;
-                            
-                            if current_order_quant>counted_quantity{
-                                current_order_quant-=counted_quantity;
-                            
-                                front.order_metadata.quantity=current_order_quant;
-                            
-                                removed_asks_order.push_back(Order { 
-                                    order_id: front.order_id,
-                                    order_metadata:OrderMetadata { quantity:counted_quantity,
-                                        ..front.order_metadata} 
-                                });
-                                break;
-
-                            }else if current_order_quant==counted_quantity{
-
-                                if let Some(remove_order)=seller_queue.pop_front(){
-                                    removed_asks_order.push_back(remove_order);
-                                };
-                                break;
-                            }else{
-                                //here we have to remove the  the front order from level and store in removed asks vec
-                                if let Some(remove_order)=seller_queue.pop_front(){
-                                    counted_quantity-=remove_order.order_metadata.quantity;
-                                    removed_asks_order.push_back(remove_order);
-                                };
-                            }
-                            
-
-                        }
-                        // ask_total_quantity-=remaining_qauntity;
-                        remaining_qauntity=0;
-                        break;
-                    }else if ask_total_quantity==remaining_qauntity{
-                        seller_price_level.total_quantity-=0;
-
-                        // ask_total_quantity=0;
-                        remaining_qauntity=0;
-                        // let Some( price_lvl)=&mut self.ask.pop_first()else{
-                        //     return Err(CustomError::ErrorFetchingAskLevel);
-                        // };
-                        let mut price_lvl=ask.remove();
-                        removed_asks_order.append( &mut price_lvl.vec_level);
-                        break;
-                    }else{//if buy_qunt>ask_total_qunt 
-                        //write the logic to change the variables and move  to the next level
-                        seller_price_level.total_quantity-=0;
-                        
-                        let mut price_lvl=ask.remove();
-                        removed_asks_order.append(&mut price_lvl.vec_level);
-                        
-
-                        remaining_qauntity-=ask_total_quantity;
-                    }
-
-
-                }
-
-                if remaining_qauntity>0{
-                            
-                    let new_order_meta=OrderMetadata{quantity:remaining_qauntity,..*order_meta};
-                    
-                    let new_order=Order::new(order_id,new_order_meta);
-
-                    match self.buy.entry(price) {
-                        Entry::Occupied(mut entry) => {
-                            // Operation if key ALREADY EXISTS
-                            let level=entry.get_mut();
-                            level.total_quantity+=remaining_qauntity;
-                            level.vec_level.push_back(new_order);
-                        }
-                        Entry::Vacant(entry) => {
-                            // Operation if key is MISSING
-                            // println!("Creating new entry");
-                            let mut new_level=PriceLevel::new(remaining_qauntity, DEFAULT_LEVEL_CAPACITY);
-                            new_level.vec_level.push_back(new_order);
-                            entry.insert(new_level);
-                        }
-                    }
-                  
-
-                        
-                        
-                }
-
-            },
-            OrderType::SELL=>{
-
-                    let mut remaining_qauntity=user_quant;
-            
-                
-                loop{
-
-                    if self.buy.is_empty(){
-                        break;
-                    }
-
-                    let Some(mut buy)= self.buy.last_entry() else{
-                        return Err(CustomError::ErrorFetchingbuyLevel);
-                    };
-                    let max_buy=*buy.key();
-                    let buy_price_level=buy.get_mut();
-                    
-                    let  buy_total_quantity=buy_price_level.total_quantity;
-                    
-                    let mut removed_buys_order: VecDeque<Order>=VecDeque::with_capacity(DEFAULT_LEVEL_CAPACITY);//storing all the aks orders that
-                    //are used to fill the buy order
-                    if max_buy<price{
-                        break;
-                    }
-
-                    if buy_total_quantity>remaining_qauntity{
-                        
-                        buy_price_level.total_quantity-=remaining_qauntity;
-                        let mut counted_quantity:u64=remaining_qauntity;
-
-                        let buyer_queue=&mut buy_price_level.vec_level;
-                        //looping through the vecdeque at current price to get the orders that fill the buy price 
-                        loop {
-                            let Some(front)=buyer_queue.front_mut()else{
-                                return Err(CustomError::ErrorFetchingVecDeque);
-                            };
-
-                            let mut current_order_quant=front.order_metadata.quantity;
-                            
-                            if current_order_quant>counted_quantity{
-                                current_order_quant-=counted_quantity;
-                            
-                                front.order_metadata.quantity=current_order_quant;
-                                
-                                removed_buys_order.push_back(Order { 
-                                    order_id: front.order_id,
-                                    order_metadata:OrderMetadata { quantity:counted_quantity,
-                                        ..front.order_metadata} 
-                                });
-                                break;
-
-                            }else if current_order_quant==counted_quantity{
-
-                                if let Some(remove_order)=buyer_queue.pop_front(){
-                                    removed_buys_order.push_back(remove_order);
-                                };
-                                break;
-                            }else{
-                                //here we have to remove the  the front order from level and store in removed buys vec
-                                if let Some(remove_order)=buyer_queue.pop_front(){
-                                    counted_quantity-=remove_order.order_metadata.quantity;
-                                    removed_buys_order.push_back(remove_order);
-                                };
-                            }
-                            
-
-                        }
-                        // buy_total_quantity-=remaining_qauntity;
-                        remaining_qauntity=0;
-                        break;
-                    }else if buy_total_quantity==remaining_qauntity{
-                        buy_price_level.total_quantity-=remaining_qauntity;
-
-                        // buy_total_quantity=0;
-                        remaining_qauntity=0;
-                        // let Some(mut price_lvl)=self.buy.pop_last()else{
-                        //     return Err(CustomError::ErrorFetchingbuyLevel);
-                        // };
-                        let mut price_lvl=buy.remove();
-                        removed_buys_order.append(&mut price_lvl.vec_level);
-                        break;
-                    }else{//if ask_qunt>buy_total_qunt 
-                        //write the logic to change the variables and move  to the next level
-                        buy_price_level.total_quantity-=0;
-                    
-                        // let Some( price_lvl)=&mut self.buy.pop_last()else{
-                        //     return Err(CustomError::ErrorFetchingbuyLevel);
-                        // };
-                        let mut price_lvl=buy.remove();
-                        removed_buys_order.append(&mut price_lvl.vec_level);
-                        
-
-                        remaining_qauntity-=buy_total_quantity;
-                        // buy_total_quantity=0;
-                    }
-
-
-                }
-
-                if remaining_qauntity>0{
-                    
-                            
-                    let new_order_meta=OrderMetadata{quantity:remaining_qauntity,..*order_meta};
-                    
-                    let new_order=Order::new(order_id,new_order_meta);
-
-                    match self.ask.entry(price) {
-                        Entry::Occupied(mut entry) => {
-                            // Operation if key ALREADY EXISTS
-                            let level=entry.get_mut();
-                            level.total_quantity+=remaining_qauntity;
-                            level.vec_level.push_back(new_order);
-                        }
-                        Entry::Vacant(entry) => {
-                            // Operation if key is MISSING
-                            // println!("Creating new entry");
-                            let mut new_level=PriceLevel::new(remaining_qauntity, DEFAULT_LEVEL_CAPACITY);
-                            new_level.vec_level.push_back(new_order);
-                            entry.insert(new_level);
-                        }
-                    }
-                    // let level=self.ask.entry(price);
-                    // // .or_insert_with(||PriceLevel::new(remaining_qauntity, DEFAULT_LEVEL_CAPACITY));
-                    // level.total_quantity=remaining_qauntity;
-
-                    // level.vec_level.push_back(new_order);
-
-                        
-                        
-                }
-               
-
-            
+            if level.head.is_none() {
+                levels.remove(&loc.price);
             }
         }
 
-        Ok("()".into())
+        self.free_node(loc.index);
+        Ok(())
+    }
 
-    }   
+    pub fn execute_order(&mut self, price: u64, order_id: u64, order_meta: &mut OrderMetadata) -> Result<String, CustomError> {
+        if price % self.tick_size != 0 {
+            return Err(CustomError::InvalidPrice);
+        }
+        if order_meta.quantity == 0 {
+            return Err(CustomError::InvalidQuantity);
+        }
+
+        let mut remaining_qty = order_meta.quantity;
+
+        match order_meta.order_type {
+            OrderType::BUY => {
+                while remaining_qty > 0 {
+                    let min_ask = match self.ask.keys().next().copied() {
+                        Some(p) => p,
+                        None => break,
+                    };
+
+                    if min_ask > price {
+                        break;
+                    }
+
+                    let level = self.ask.get_mut(&min_ask).unwrap();
+                    let mut current_idx = level.head;
+
+                    while let Some(idx) = current_idx {
+                        if remaining_qty == 0 {
+                            break;
+                        }
+
+                        let order = self.orders_pool[idx].order;
+                        let order_qty = order.order_metadata.quantity;
+
+                        if order_qty > remaining_qty {
+                            self.orders_pool[idx].order.order_metadata.quantity -= remaining_qty;
+                            level.total_quantity -= remaining_qty;
+                            remaining_qty = 0;
+                            break;
+                        } else {
+                            remaining_qty -= order_qty;
+                            level.total_quantity -= order_qty;
+
+                            current_idx = self.orders_pool[idx].next;
+                            level.head = current_idx;
+                            if let Some(next_idx) = current_idx {
+                                self.orders_pool[next_idx].prev = None;
+                            } else {
+                                level.tail = None;
+                            }
+
+                            let id_to_free = self.orders_pool[idx].order.order_id;
+                            self.orders_map.remove(&id_to_free);
+                            self.free_list.push(idx);
+                        }
+                    }
+
+                    if level.head.is_none() {
+                        self.ask.remove(&min_ask);
+                    }
+                }
+
+                if remaining_qty > 0 {
+                    let mut new_meta = *order_meta;
+                    new_meta.quantity = remaining_qty;
+                    self.append_to_level(price, OrderType::BUY, order_id, new_meta);
+                }
+            }
+            OrderType::SELL => {
+                while remaining_qty > 0 {
+                    let max_bid = match self.buy.keys().next_back().copied() {
+                        Some(p) => p,
+                        None => break,
+                    };
+
+                    if max_bid < price {
+                        break;
+                    }
+
+                    let level = self.buy.get_mut(&max_bid).unwrap();
+                    let mut current_idx = level.head;
+
+                    while let Some(idx) = current_idx {
+                        if remaining_qty == 0 {
+                            break;
+                        }
+
+                        let order = self.orders_pool[idx].order;
+                        let order_qty = order.order_metadata.quantity;
+
+                        if order_qty > remaining_qty {
+                            self.orders_pool[idx].order.order_metadata.quantity -= remaining_qty;
+                            level.total_quantity -= remaining_qty;
+                            remaining_qty = 0;
+                            break;
+                        } else {
+                            remaining_qty -= order_qty;
+                            level.total_quantity -= order_qty;
+
+                            current_idx = self.orders_pool[idx].next;
+                            level.head = current_idx;
+                            if let Some(next_idx) = current_idx {
+                                self.orders_pool[next_idx].prev = None;
+                            } else {
+                                level.tail = None;
+                            }
+
+                            let id_to_free = self.orders_pool[idx].order.order_id;
+                            self.orders_map.remove(&id_to_free);
+                            self.free_list.push(idx);
+                        }
+                    }
+
+                    if level.head.is_none() {
+                        self.buy.remove(&max_bid);
+                    }
+                }
+
+                if remaining_qty > 0 {
+                    let mut new_meta = *order_meta;
+                    new_meta.quantity = remaining_qty;
+                    self.append_to_level(price, OrderType::SELL, order_id, new_meta);
+                }
+            }
+        }
+
+        Ok("()".to_string())
+    }
 
     pub fn print_summary(&self) {
         println!("\n================ ORDER BOOK ================");
 
         println!("\n------------- ASKS -------------");
         for (price, level) in self.ask.iter().rev() {
-            println!("Price: {:<10} | Total Qty: {}", *price as f64 /(self.multiplier as f64), level.total_quantity);
+            println!("Price: {:<10} | Total Qty: {}", *price as f64 / (self.multiplier as f64), level.total_quantity);
         }
 
         println!("\n------------- BIDS -------------");
         for (price, level) in self.buy.iter().rev() {
-            println!("Price: {:<10} | Total Qty: {}", *price as f64 /(self.multiplier as f64), level.total_quantity);
+            println!("Price: {:<10} | Total Qty: {}", *price as f64 / (self.multiplier as f64), level.total_quantity);
         }
 
         println!("============================================\n");
     }
 
-     pub fn print_detailed(&self) {
+    pub fn print_detailed(&self) {
         println!("\n================ ORDER BOOK (DETAILED) ================");
 
         println!("\n------------- ASKS -------------");
         for (price, level) in &self.ask {
-            println!("Price: {} | Total Qty: {}", *price as f64/(self.multiplier as f64), level.total_quantity);
+            println!("Price: {} | Total Qty: {}", *price as f64 / (self.multiplier as f64), level.total_quantity);
 
-            for order in &level.vec_level {
+            let mut current = level.head;
+            while let Some(idx) = current {
+                let order = &self.orders_pool[idx].order;
                 println!(
                     "   OrderID: {} | Qty: {} | User: {} | Time: {} | Type: {:?}",
                     order.order_id,
@@ -388,14 +350,17 @@ impl LimitOrderBook {
                     order.order_metadata.time,
                     order.order_metadata.order_type
                 );
+                current = self.orders_pool[idx].next;
             }
         }
 
         println!("\n------------- BIDS -------------");
         for (price, level) in &self.buy {
-            println!("Price: {} | Total Qty: {}", *price as f64/(self.multiplier as f64), level.total_quantity);
+            println!("Price: {} | Total Qty: {}", *price as f64 / (self.multiplier as f64), level.total_quantity);
 
-            for order in &level.vec_level {
+            let mut current = level.head;
+            while let Some(idx) = current {
+                let order = &self.orders_pool[idx].order;
                 println!(
                     "   OrderID: {} | Qty: {} | User: {} | Time: {} | Type: {:?}",
                     order.order_id,
@@ -404,22 +369,10 @@ impl LimitOrderBook {
                     order.order_metadata.time,
                     order.order_metadata.order_type
                 );
+                current = self.orders_pool[idx].next;
             }
         }
 
         println!("=======================================================\n");
     }
 }
-
-
-#[derive(Debug)]
-pub enum CustomError{
-    InvalidPrice,
-    InvalidQuantity,
-    InvalidOrderType,
-    ErrorFetchingAskLevel,
-    ErrorFetchingbuyLevel,
-    ErrorFetchingVecDeque,
-    NegativeTickSize
-}
-
