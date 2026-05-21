@@ -37,7 +37,7 @@ fn benchmark_insert_orders(c: &mut Criterion) {
                 user_id: 2313123
             };
 
-            order_book.execute_order(1000, 312311213, &mut order_meta).unwrap();
+            order_book.execute_order(1000,  &mut order_meta).unwrap();
         })
     });
 }
@@ -58,7 +58,7 @@ fn benchmark_execute_matching(c: &mut Criterion) {
                 user_id: 2313123
             };
 
-            order_book.execute_order(1000, 312311213, &mut order_meta).unwrap();
+            order_book.execute_order(1000, &mut order_meta).unwrap();
 
 
             // BUY 2 (100.5)
@@ -69,7 +69,7 @@ fn benchmark_execute_matching(c: &mut Criterion) {
                 user_id: 213131
             };
 
-            order_book.execute_order(1005, 2222, &mut order_meta).unwrap();
+            order_book.execute_order(1005, &mut order_meta).unwrap();
 
 
             // SELL 1 (105.0)
@@ -80,7 +80,7 @@ fn benchmark_execute_matching(c: &mut Criterion) {
                 user_id: 88888
             };
 
-            order_book.execute_order(1050, 4444, &mut order_meta).unwrap();
+            order_book.execute_order(1050,  &mut order_meta).unwrap();
 
 
             // SELL 2 (104.5)
@@ -91,7 +91,7 @@ fn benchmark_execute_matching(c: &mut Criterion) {
                 user_id: 99999
             };
 
-            order_book.execute_order(1045, 5555, &mut order_meta).unwrap();
+            order_book.execute_order(1045,  &mut order_meta).unwrap();
 
 
             // Match SELL (100.5)
@@ -102,7 +102,7 @@ fn benchmark_execute_matching(c: &mut Criterion) {
                 user_id: 77777
             };
 
-            order_book.execute_order(1005, 6666, &mut order_meta).unwrap();
+            order_book.execute_order(1005,  &mut order_meta).unwrap();
 
 
             // Match BUY (104.5)
@@ -113,7 +113,7 @@ fn benchmark_execute_matching(c: &mut Criterion) {
                 user_id: 55555
             };
 
-            order_book.execute_order(1045, 7777, &mut order_meta).unwrap();
+            order_book.execute_order(1045,  &mut order_meta).unwrap();
 
             black_box(order_book);
         })

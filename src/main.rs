@@ -1,112 +1,75 @@
 #![allow(unused)]
 
-use chrono::Utc;
-use order_book::{CustomError, LimitOrderBook, OrderMetadata, OrderType};
+use std::{collections::HashMap, net::TcpListener, sync::{Arc, Mutex}};
 
-fn main() {
+use anyhow::Result;
+use axum::{Router, routing::{post,get}};
+use order_book::{LimitOrderBook, OrderDetails, OrderStatus};
+use tokio::sync::{ mpsc::{self, Sender}};
 
-    // tick_size = 5 (0.5)
-    // multiplier = 10 (1 decimal precision)
-    let mut order_book = LimitOrderBook::new(5, 10);
+use crate::apis::order_placing::place_order;
 
-    // BUY 1 (100.0)
-    let mut order_meta = OrderMetadata {
-        quantity: 5,
-        order_type: OrderType::BUY,
-        time: Utc::now(),
-        user_id: 2313123
-    };
+const PORT:usize=3000;
 
-    order_book.execute_order(1000, 312311213, &mut order_meta).unwrap();
+const TICK_SIZE:u64=5;
 
+const MULTIPLIER:u64=5;
 
-    // BUY 2 (100.5)
-    let mut order_meta = OrderMetadata {
-        quantity: 9,
-        order_type: OrderType::BUY,
-        time: Utc::now(),
-        user_id: 213131
-    };
+#[derive(Debug,Clone)]
+pub struct UserState{
+    txn:Sender<OrderDetails>,
+    map:Arc<Mutex<HashMap<u64,Sender<OrderStatus>>>>
+}
+mod test_fn;
 
-    match order_book.execute_order(1005, 2222, &mut order_meta) {
-        Ok(_) => { println!("inserted"); },
-        Err(_) => { println!("error") }
-    };
+mod apis;
 
+type MapType=Arc<Mutex<HashMap<u64,Sender<OrderStatus>>>>;
 
-    // SELL 1 (105.0)
-    let mut order_meta = OrderMetadata {
-        quantity: 7,
-        order_type: OrderType::SELL,
-        time: Utc::now(),
-        user_id: 88888
-    };
+#[tokio::main]
+async fn main()->Result<()>{
 
-    order_book.execute_order(1050, 4444, &mut order_meta).unwrap();
-
-
-    // SELL 2 (104.5)
-    let mut order_meta = OrderMetadata {
-        quantity: 3,
-        order_type: OrderType::SELL,
-        time: Utc::now(),
-        user_id: 99999
-    };
-
-    order_book.execute_order(1045, 5555, &mut order_meta).unwrap();
-
-
-    order_book.print_summary();
-
-    println!("status before");
-
-    // SELL (100.5)
-    let mut order_meta = OrderMetadata {
-        quantity: 15,
-        order_type: OrderType::SELL,
-        time: Utc::now(),
-        user_id: 77777
-    };
-
-    match order_book.execute_order(1005, 6666, &mut order_meta) {
-        Ok(_) => {
-            println!("after selling 15 @ 100.5");
-            order_book.print_summary();
-        },
-        Err(e) => {
-            println!("{:?}", e);
-        }
-    };
-
-
-    // BUY (104.5)
-    let mut order_meta = OrderMetadata {
-        quantity: 8,
-        order_type: OrderType::BUY,
-        time: Utc::now(),
-        user_id: 55555
-    };
-
-    match order_book.execute_order(1045, 7777, &mut order_meta) {
-        Ok(_) => {
-            println!("after buying 8 @ 104.5");
-            order_book.print_summary();
-        },
-        Err(e) => {
-            println!("{:?}", e);
-        }
-    };
-
-    println!("status before cancellation");
+    let mut map:MapType=Arc::new(Mutex::new(HashMap::new()));
+    let (txn,mut recv)=mpsc::channel::<OrderDetails>(100000);
     
-    // Cancel the order with user_id 99999 (which is order_id 5555, qty 3 @ 1045 SELL)
-    match order_book.cancel_order(5555) {
-        Ok(_) => println!("Successfully cancelled order 5555 (Qty 3 @ 104.5)"),
-        Err(e) => println!("Error cancelling order 5555: {:?}", e),
-    }
+    let map_clone=map.clone();
 
-    println!("status after cancellation");
-    order_book.print_summary();
+    let state=Arc::new(UserState{
+        txn:txn.clone(),
+        map
+    });
+    
+    let recv_handle=tokio::spawn(async move{
 
-    order_book.print_detailed();
+        let mut lob:LimitOrderBook=LimitOrderBook::new(5, 10);
+        println!("here");
+        while let Some(orders)=recv.recv().await{
+            println!("H");
+            if let Ok(response)=lob.placing_order(orders){
+                let user_id=response.order_meta.user_id;
+                
+
+                let out_txn={
+                    let map=map_clone.lock().unwrap();
+                    map.get(&user_id).unwrap().clone()
+                };
+
+                out_txn.send(response).await;
+
+            };
+            // println!("{:?}",response);
+        }
+
+    });
+
+    let app=Router::new()
+    .route("/placeOrder", get(place_order))
+    .with_state(state);
+
+    
+
+    let listener=tokio::net::TcpListener::bind(format!("0.0.0.0:{}",PORT)).await?;
+    axum::serve(listener,app).await?;
+
+    Ok(())
 }

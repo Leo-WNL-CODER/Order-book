@@ -1,14 +1,33 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{collections::{BTreeMap, HashMap}};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
-#[derive(PartialEq, Debug, Clone, Copy)]
+
+pub struct OrderDetails{
+    pub order_qnt:u64,
+    pub price:u64,
+    pub quantity: u64,
+    pub order_type: OrderType,
+    pub time: DateTime<Utc>,
+    pub user_id: u64,
+}
+
+#[derive( Debug, Clone, Copy,Serialize)]
+pub struct OrderStatus {
+    pub total:u64,
+    pub filled:u64,
+    pub remaining:u64,
+    pub order_meta:OrderMetadata
+}
+
+#[derive(PartialEq, Debug, Clone, Copy,Serialize,Deserialize)]
 pub enum OrderType {
     BUY,
     SELL,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct OrderMetadata {
+#[derive(Debug, Clone, Copy,Serialize)]
+pub struct  OrderMetadata {
     pub quantity: u64,
     pub order_type: OrderType,
     pub time: DateTime<Utc>,
@@ -74,10 +93,12 @@ pub enum CustomError {
     ErrorFetchingBuyLevel,
     ErrorFetchingVecDeque,
     NegativeTickSize,
+    ErrorProcessingOrder
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct LimitOrderBook {
+    pub next_order_id:u64,
     pub multiplier: u64,
     pub tick_size: u64,
     pub buy: BTreeMap<u64, PriceLevel>,
@@ -90,6 +111,7 @@ pub struct LimitOrderBook {
 impl LimitOrderBook {
     pub fn new(tick_size: u64, multiplier: u64) -> Self {
         Self {
+            next_order_id:0,
             tick_size,
             buy: BTreeMap::new(),
             ask: BTreeMap::new(),
@@ -188,7 +210,12 @@ impl LimitOrderBook {
         Ok(())
     }
 
-    pub fn execute_order(&mut self, price: u64, order_id: u64, order_meta: &mut OrderMetadata) -> Result<String, CustomError> {
+    pub fn get_next_id(&mut self)->u64{
+        let id=self.next_order_id;
+        self.next_order_id+=1;
+        id
+    }
+    pub fn execute_order(&mut self, price: u64, order_meta: &mut OrderMetadata) -> Result<OrderStatus, CustomError> {
         if price % self.tick_size != 0 {
             return Err(CustomError::InvalidPrice);
         }
@@ -197,6 +224,10 @@ impl LimitOrderBook {
         }
 
         let mut remaining_qty = order_meta.quantity;
+
+        let initial_order_meta=*order_meta;
+
+        let order_id=self.get_next_id();
 
         match order_meta.order_type {
             OrderType::BUY => {
@@ -313,9 +344,23 @@ impl LimitOrderBook {
             }
         }
 
-        Ok("()".to_string())
+        let total=initial_order_meta.quantity;
+        let order_status=OrderStatus{
+            total,
+            filled:total-remaining_qty,
+            remaining:remaining_qty,
+            order_meta:initial_order_meta
+        };
+        Ok(order_status)
     }
 
+    pub fn placing_order(&mut self,order_detail:OrderDetails)->Result<OrderStatus,CustomError>{
+        let mut order_meta=OrderMetadata::new(order_detail.quantity,
+             order_detail.order_type, 
+             order_detail.time, 
+             order_detail.user_id);
+        self.execute_order(order_detail.price, &mut order_meta)
+    }
     pub fn print_summary(&self) {
         println!("\n================ ORDER BOOK ================");
 
