@@ -447,7 +447,7 @@ This project aims to explore:
 - Off-chain matching architecture
 - Blockchain settlement integration
 
-
+    
 ---
 
 # Image

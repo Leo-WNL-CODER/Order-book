@@ -44,20 +44,27 @@ async fn main()->Result<()>{
         let mut lob:LimitOrderBook=LimitOrderBook::new(5, 10);
         println!("here");
         while let Some(orders)=recv.recv().await{
-            println!("H");
-            if let Ok(response)=lob.placing_order(orders){
-                let user_id=response.order_meta.user_id;
+            if let Ok(events)=lob.placing_order(orders){
+                    println!("{:?}",events);
+
+                    // for e in events{
+                        //here we will compute for the events 
+                        //since orderstatus contains the matcher id and user id the corresponding price
+                        //and the filled qnt
+                        //So we have to fetch their current details from 
+                    // }
+                // let user_id=events.order_meta.user_id;
                 
 
-                let out_txn={
-                    let map=map_clone.lock().unwrap();
-                    map.get(&user_id).unwrap().clone()
-                };
+                // let out_txn={
+                //     let map=map_clone.lock().unwrap();
+                //     map.get(&user_id).unwrap().clone()
+                // };
 
-                out_txn.send(response).await;
+                // out_txn.send(events).await;
 
             };
-            // println!("{:?}",response);
+            // println!("{:?}",events);
         }
 
     });

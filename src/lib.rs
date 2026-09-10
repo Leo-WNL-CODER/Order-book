@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 
-pub struct OrderDetails{
+pub struct  OrderDetails{
     pub order_qnt:u64,
     pub price:u64,
     pub quantity: u64,
@@ -19,6 +19,18 @@ pub struct OrderStatus {
     pub remaining:u64,
     pub order_meta:OrderMetadata
 }
+
+#[derive( Debug, Clone, Copy,Serialize)]
+pub struct OrderStatus1 {
+    pub match_id:u64,
+    pub match_price:u64,
+    pub match_qnt:u64,//this is the total qnt of the matched order
+    pub total:u64,
+    pub filled:u64,
+    pub remaining:u64,
+    pub order_meta:OrderMetadata
+}
+
 
 #[derive(PartialEq, Debug, Clone, Copy,Serialize,Deserialize)]
 pub enum OrderType {
@@ -96,11 +108,24 @@ pub enum CustomError {
     ErrorProcessingOrder
 }
 
+
+#[derive(Debug)]
+struct Event{
+    user_id:u64,
+    match_id:u64,
+    price:u64,
+    filled_qnt:u64
+}
+
 #[derive(Debug,Clone)]
 pub struct LimitOrderBook {
-    pub next_order_id:u64,
+    //this is kind of global counter which is initialized to 0 at the start and is incremented for the next order 
+    pub next_order_id:u64,    
     pub multiplier: u64,
     pub tick_size: u64,
+//  So BUY/SELL is a BtreeMap so here-:
+//  Keys=price number e.g. 100
+//  Values=Pricelevel-->this stores the order info who placed the order for the Price=Key i.e Price=100
     pub buy: BTreeMap<u64, PriceLevel>,
     pub ask: BTreeMap<u64, PriceLevel>,
     pub orders_pool: Vec<OrderNode>,
@@ -210,56 +235,117 @@ impl LimitOrderBook {
         Ok(())
     }
 
+    //this fn returns the current id i.e. the number which is currently stored for the current order
+    //and increments it for the next order when arrives
     pub fn get_next_id(&mut self)->u64{
         let id=self.next_order_id;
         self.next_order_id+=1;
         id
     }
-    pub fn execute_order(&mut self, price: u64, order_meta: &mut OrderMetadata) -> Result<OrderStatus, CustomError> {
+
+
+    //this function is the core of the matching engine as it matches or stores the BUY/SELL orders
+    pub fn execute_order(&mut self, price: u64, order_meta: &mut OrderMetadata) -> Result<Vec<OrderStatus1>, CustomError> {
+        
         if price % self.tick_size != 0 {
             return Err(CustomError::InvalidPrice);
         }
+
         if order_meta.quantity == 0 {
             return Err(CustomError::InvalidQuantity);
         }
 
+        //here we just copied the quantity to another var to avoid changing the original qnt directly
+        //it is helpful as whether the order type is BUY/SELL we keep running the loop until
+        //remaining qnt>0
         let mut remaining_qty = order_meta.quantity;
 
         let initial_order_meta=*order_meta;
-
+                  
         let order_id=self.get_next_id();
+
+        let mut events=Vec::<OrderStatus1>::new();
 
         match order_meta.order_type {
             OrderType::BUY => {
+
                 while remaining_qty > 0 {
+                    //the min_ask stores the price for the minimum selling price 
+                    //as in the btreeMap for ASK the key=price so we fetch that price 
+                    //and do computation according that
                     let min_ask = match self.ask.keys().next().copied() {
                         Some(p) => p,
                         None => break,
                     };
 
+                    //this is the check
+                    //we only proceed further if min_ask<=price
+                    //as this is limit order matching engine 
                     if min_ask > price {
                         break;
                     }
 
+                    //here we get the mut ref to the pricelevel which has min ask 
+                    //so we can essentially call it the current PriceLevel
                     let level = self.ask.get_mut(&min_ask).unwrap();
+
+                    //since orders are originally stored in the orders pool(type=Vector) 
+                    //the price level is the linked list which stores the indexes of the
+                    //orders stored in the order pool
+                    //so here we fetch the first order at the current price level
                     let mut current_idx = level.head;
 
+                    //this loop is to traverse the current pricelevel and match the orders
                     while let Some(idx) = current_idx {
+
                         if remaining_qty == 0 {
                             break;
                         }
 
+                           //since originally the order pool stores the Orders we get the access to it using the
+                        //index 
                         let order = self.orders_pool[idx].order;
                         let order_qty = order.order_metadata.quantity;
 
+                        //here we check the current order qty and compare it with the remaining qnt
+                        //if cur_order_qnt > remaining qnt it means it means cur order can consume the 
+                        //the whole remaining qnt we can break the loop for current price level
+                        //otherwise we just reduce the qnt the current order can produce 
                         if order_qty > remaining_qty {
+                            
                             self.orders_pool[idx].order.order_metadata.quantity -= remaining_qty;
+                            
                             level.total_quantity -= remaining_qty;
+                            
+                            let order_s=OrderStatus1{
+                                match_id:order.order_metadata.user_id,
+                                match_price:min_ask,
+                                match_qnt:order.order_metadata.quantity,
+                                total:initial_order_meta.quantity,
+                                filled:remaining_qty,
+                                remaining:0,
+                                order_meta:initial_order_meta
+                            };
+                            
                             remaining_qty = 0;
+                            
+                            events.push(order_s);
                             break;
                         } else {
                             remaining_qty -= order_qty;
                             level.total_quantity -= order_qty;
+                            
+                            let order_s=OrderStatus1{
+                                match_id:order.order_metadata.user_id,
+                                match_price:min_ask,
+                                match_qnt:order.order_metadata.quantity,
+                                total:initial_order_meta.quantity,
+                                filled:order_qty,
+                                remaining:remaining_qty,
+                                order_meta:initial_order_meta
+                            };
+                            
+                            events.push(order_s);
 
                             current_idx = self.orders_pool[idx].next;
                             level.head = current_idx;
@@ -293,6 +379,8 @@ impl LimitOrderBook {
                         None => break,
                     };
 
+                    //debugging-
+                    // println!("{}",max_bid);
                     if max_bid < price {
                         break;
                     }
@@ -311,11 +399,61 @@ impl LimitOrderBook {
                         if order_qty > remaining_qty {
                             self.orders_pool[idx].order.order_metadata.quantity -= remaining_qty;
                             level.total_quantity -= remaining_qty;
+
+                            //sellers_orderstatus
+                            let order_s=OrderStatus1{
+                                match_id:order.order_metadata.user_id,
+                                match_price:max_bid,
+                                match_qnt:order.order_metadata.quantity,
+                                total:initial_order_meta.quantity,
+                                filled:remaining_qty,
+                                remaining:0,
+                                order_meta:initial_order_meta
+                            };
+
+                            //buyer_orderstatus
+                            let order_b =OrderStatus1{
+                                match_id:initial_order_meta.user_id,
+                                match_price:max_bid,
+                                match_qnt:remaining_qty,
+                                total:order_qty,
+                                filled:remaining_qty,
+                                remaining:order_qty-remaining_qty,
+                                order_meta:self.orders_pool[idx].order.order_metadata
+                            };
+
                             remaining_qty = 0;
+
+                            events.push(order_s);
+                            events.push(order_b);
+
                             break;
                         } else {
                             remaining_qty -= order_qty;
                             level.total_quantity -= order_qty;
+
+                            let order_s=OrderStatus1{
+                                match_id:order.order_metadata.user_id,
+                                match_price:max_bid,
+                                match_qnt:order.order_metadata.quantity,
+                                total:initial_order_meta.quantity,
+                                filled:order_qty,
+                                remaining:remaining_qty,
+                                order_meta:initial_order_meta
+                            };
+
+                            let order_b =OrderStatus1{
+                                match_id:initial_order_meta.user_id,
+                                match_price:max_bid,
+                                match_qnt:order.order_metadata.quantity,
+                                total:order_qty,
+                                filled:order_qty,
+                                remaining:0,
+                                order_meta:self.orders_pool[idx].order.order_metadata
+                            };
+                            
+                            events.push(order_s);
+                            events.push(order_b);
 
                             current_idx = self.orders_pool[idx].next;
                             level.head = current_idx;
@@ -351,16 +489,26 @@ impl LimitOrderBook {
             remaining:remaining_qty,
             order_meta:initial_order_meta
         };
-        Ok(order_status)
+        Ok(events)
     }
 
-    pub fn placing_order(&mut self,order_detail:OrderDetails)->Result<OrderStatus,CustomError>{
+    //this function inherently calls the execute_order() fn 
+    //to match the orders
+    pub fn placing_order(&mut self,order_detail:OrderDetails)->Result<Vec<OrderStatus1>,CustomError>{
         let mut order_meta=OrderMetadata::new(order_detail.quantity,
              order_detail.order_type, 
              order_detail.time, 
              order_detail.user_id);
         self.execute_order(order_detail.price, &mut order_meta)
+        //so here after the orders get executed we can also just send the current limit order book state
+        //or we can create another function which when called by backend we can get the current 
+        //order book state and we can have separate websocket connection from backend to frontend which will
+        //keep on updating as the order gets updated
     }
+
+
+    //this fn just prints the order book
+    //when called
     pub fn print_summary(&self) {
         println!("\n================ ORDER BOOK ================");
 
