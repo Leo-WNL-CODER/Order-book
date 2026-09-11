@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{Json, body, extract::{State, WebSocketUpgrade, ws::{WebSocket,Message}}, response::{IntoResponse, Response}};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
-use order_book::{OrderDetails, OrderStatus, OrderType};
+use order_book::{OrderDetails, OrderStatus, OrderStatus1, OrderType};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
@@ -33,11 +33,11 @@ async fn handle_socket(
     state: Arc<UserState>,
 ){
 
-    let (out_tx,mut out_recv)=mpsc::channel::<OrderStatus>(1000);
+    let (out_tx,mut out_recv)=mpsc::channel::<OrderStatus1>(1000);
     let (mut sender, mut receiver) = socket.split();
     tokio::spawn(async move{
         while let Some(m)=out_recv.recv().await{
-            if let Ok(serialized)=serde_json::to_string::<OrderStatus>(&m){
+            if let Ok(serialized)=serde_json::to_string::<OrderStatus1>(&m){
                 
                 sender.send(Message::Text(serialized.into())).await;
             }

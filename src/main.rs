@@ -4,7 +4,7 @@ use std::{collections::HashMap, net::TcpListener, sync::{Arc, Mutex}};
 
 use anyhow::Result;
 use axum::{Router, routing::{post,get}};
-use order_book::{LimitOrderBook, OrderDetails, OrderStatus};
+use order_book::{LimitOrderBook, OrderDetails, OrderStatus, OrderStatus1};
 use tokio::sync::{ mpsc::{self, Sender}};
 
 use crate::apis::order_placing::place_order;
@@ -18,13 +18,13 @@ const MULTIPLIER:u64=5;
 #[derive(Debug,Clone)]
 pub struct UserState{
     txn:Sender<OrderDetails>,
-    map:Arc<Mutex<HashMap<u64,Sender<OrderStatus>>>>
+    map:Arc<Mutex<HashMap<u64,Sender<OrderStatus1>>>>
 }
 mod test_fn;
 
 mod apis;
 
-type MapType=Arc<Mutex<HashMap<u64,Sender<OrderStatus>>>>;
+type MapType=Arc<Mutex<HashMap<u64,Sender<OrderStatus1>>>>;
 
 #[tokio::main]
 async fn main()->Result<()>{
@@ -45,14 +45,26 @@ async fn main()->Result<()>{
         println!("here");
         while let Some(orders)=recv.recv().await{
             if let Ok(events)=lob.placing_order(orders){
-                    println!("{:?}",events);
+                    // println!("{:?}",events);
 
-                    // for e in events{
-                        //here we will compute for the events 
-                        //since orderstatus contains the matcher id and user id the corresponding price
-                        //and the filled qnt
-                        //So we have to fetch their current details from 
-                    // }
+                    for e in events{
+                    //     here we will compute for the events 
+                    //     since orderstatus contains the matcher id and user id the corresponding price
+                    //     and the filled qnt
+                    //     So we have to fetch their current details from 
+                        
+                        let user_id=e.order_meta.user_id;
+                
+
+                        let out_txn={
+                            let map=map_clone.lock().unwrap();
+                            map.get(&user_id).unwrap().clone()
+                        };
+
+                        let os=e;
+
+                        out_txn.send(e).await;
+                    }
                 // let user_id=events.order_meta.user_id;
                 
 
