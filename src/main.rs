@@ -4,10 +4,10 @@ use std::{collections::HashMap, net::TcpListener, sync::{Arc, Mutex}};
 
 use anyhow::Result;
 use axum::{Router, routing::{post,get}};
-use order_book::{LimitOrderBook, OrderDetails, OrderStatus, OrderStatus1};
+use order_book::{EngineEvents, EngineRequest, LimitOrderBook, OrderDetails, OrderStatus, OrderStatus1};
 use tokio::sync::{ mpsc::{self, Sender}};
 
-use crate::apis::order_placing::place_order;
+use crate::apis::order_placing::{place_order};
 
 const PORT:usize=3000;
 
@@ -17,7 +17,7 @@ const MULTIPLIER:u64=5;
 
 #[derive(Debug,Clone)]
 pub struct UserState{
-    txn:Sender<OrderDetails>,
+    txn:Sender<EngineRequest>,
     map:Arc<Mutex<HashMap<u64,Sender<OrderStatus1>>>>
 }
 mod test_fn;
@@ -30,7 +30,7 @@ type MapType=Arc<Mutex<HashMap<u64,Sender<OrderStatus1>>>>;
 async fn main()->Result<()>{
 
     let mut map:MapType=Arc::new(Mutex::new(HashMap::new()));
-    let (txn,mut recv)=mpsc::channel::<OrderDetails>(100000);
+    let (txn,mut recv)=mpsc::channel::<EngineRequest>(100000);
     
     let map_clone=map.clone();
 
@@ -47,24 +47,33 @@ async fn main()->Result<()>{
             if let Ok(events)=lob.placing_order(orders){
                     // println!("{:?}",events);
 
-                    for e in events{
-                    //     here we will compute for the events 
-                    //     since orderstatus contains the matcher id and user id the corresponding price
-                    //     and the filled qnt
-                    //     So we have to fetch their current details from 
-                        
-                        let user_id=e.order_meta.user_id;
-                
-
-                        let out_txn={
-                            let map=map_clone.lock().unwrap();
-                            map.get(&user_id).unwrap().clone()
-                        };
-
-                        let os=e;
-
-                        out_txn.send(e).await;
+                    match events{
+                        EngineEvents::Order_Status(status_vec)=>{
+                            for e in status_vec{
+                                //     here we will compute for the events 
+                                //     since orderstatus contains the matcher id and user id the corresponding price
+                                //     and the filled qnt
+                                //     So we have to fetch their current details from 
+                                    
+                                    let user_id=e.order_meta.user_id;
+                            
+            
+                                    let out_txn={
+                                        let map=map_clone.lock().unwrap();
+                                        map.get(&user_id).unwrap().clone()
+                                    };
+            
+                                    let os=e;
+            
+                                    out_txn.send(e).await;
+                                }
+                        },
+                        EngineEvents::Canceled_Order()=>{
+                            //todo
+                        }
                     }
+
+                   
                 // let user_id=events.order_meta.user_id;
                 
 

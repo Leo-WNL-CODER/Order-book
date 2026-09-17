@@ -1,8 +1,12 @@
 use std::{collections::{BTreeMap, HashMap}};
+// use anyhow::Ok;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+// use crate::EngineRequest::{Cancel, Place};
 
+
+#[derive(Debug,Deserialize,Clone)]
 pub struct  OrderDetails{
     pub order_qnt:u64,
     pub price:u64,
@@ -117,6 +121,30 @@ struct Event{
     filled_qnt:u64
 }
 
+#[derive(Debug)]
+pub struct CancelOrderStatus{
+    order_id:u64,
+    user_id:u64,
+    qnt:u64,
+    price:u64
+}
+
+#[derive(Debug)]
+pub enum EngineEvents{
+    Order_Status(Vec<OrderStatus1>),
+    Canceled_Order(String)
+}
+
+
+#[derive(Debug)]
+pub enum EngineRequest{
+    Place(OrderDetails),
+    Cancel{
+        order_id:u64,
+        user_id:u64,
+    }
+}
+
 #[derive(Debug,Clone)]
 pub struct LimitOrderBook {
     //this is kind of global counter which is initialized to 0 at the start and is incremented for the next order 
@@ -194,7 +222,8 @@ impl LimitOrderBook {
         level.total_quantity += qty;
     }
 
-    pub fn cancel_order(&mut self, order_id: u64) -> Result<(), CustomError> {
+    pub fn cancel_order(&mut self, order_id: u64) -> Result<CancelOrderStatus, CustomError> {
+        
         let loc = match self.orders_map.get(&order_id).copied() {
             Some(l) => l,
             None => return Err(CustomError::OrderNotFound),
@@ -232,6 +261,27 @@ impl LimitOrderBook {
         }
 
         self.free_node(loc.index);
+        //here instead of sending Ok() we should 
+        //create a separate cancelled order status struct and send it to the user
+        //right now this function is little rigid like 
+        //it does not provide the flexibility of removing specific number of
+        //quantites from a specific order -->will add that it future 
+
+
+        /*
+         CancelOrderStatus{
+            order_id
+            user_id
+            quantities
+            price
+            OrderType
+        }
+         */ 
+        // */
+
+        let cancel_o_s=CancelOrderStatus{
+
+        }
         Ok(())
     }
 
@@ -494,12 +544,29 @@ impl LimitOrderBook {
 
     //this function inherently calls the execute_order() fn 
     //to match the orders
-    pub fn placing_order(&mut self,order_detail:OrderDetails)->Result<Vec<OrderStatus1>,CustomError>{
-        let mut order_meta=OrderMetadata::new(order_detail.quantity,
-             order_detail.order_type, 
-             order_detail.time, 
-             order_detail.user_id);
-        self.execute_order(order_detail.price, &mut order_meta)
+    pub fn placing_order(&mut self,engine_request:EngineRequest)->Result<EngineEvents,CustomError>{
+
+        match engine_request{
+            EngineRequest::Place(order_detail)=>{
+                let mut order_meta=OrderMetadata::new(order_detail.quantity,
+                    order_detail.order_type, 
+                    order_detail.time, 
+                    order_detail.user_id);
+
+                self.execute_order(order_detail.price,&mut order_meta).map(
+                    |od|EngineEvents::Order_Status(od)
+                )
+            },
+
+            EngineRequest::Cancel{order_id,user_id}=>{
+                
+                self.cancel_order(order_id).map(
+                    |_|EngineEvents::Canceled_Order(String::from("Successfully cancelled")))
+                
+            }
+        }
+
+        
         //so here after the orders get executed we can also just send the current limit order book state
         //or we can create another function which when called by backend we can get the current 
         //order book state and we can have separate websocket connection from backend to frontend which will
