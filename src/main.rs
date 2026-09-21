@@ -4,10 +4,10 @@ use std::{collections::HashMap, net::TcpListener, sync::{Arc, Mutex}};
 
 use anyhow::Result;
 use axum::{Router, routing::{post,get}};
-use order_book::{EngineEvents, EngineRequest, LimitOrderBook, OrderDetails, OrderStatus, OrderStatus1};
+use order_book::{CancelOrderStatus, EngineEvents, EngineRequest, LimitOrderBook, OrderDetails, OrderStatus, OrderStatus1};
 use tokio::sync::{ mpsc::{self, Sender}};
 
-use crate::apis::order_placing::{place_order};
+use crate::apis::order_placing::{UserRequest, place_order};
 
 const PORT:usize=3000;
 
@@ -18,13 +18,20 @@ const MULTIPLIER:u64=5;
 #[derive(Debug,Clone)]
 pub struct UserState{
     txn:Sender<EngineRequest>,
-    map:Arc<Mutex<HashMap<u64,Sender<OrderStatus1>>>>
+    map:Arc<Mutex<HashMap<u64,Sender<TradeResponse>>>>
 }
+
+#[derive(Debug)]
+pub enum TradeResponse{
+    OrderStatus(OrderStatus1),
+    CancelledOrder(CancelOrderStatus)
+}
+
 mod test_fn;
 
 mod apis;
 
-type MapType=Arc<Mutex<HashMap<u64,Sender<OrderStatus1>>>>;
+type MapType=Arc<Mutex<HashMap<u64,Sender<TradeResponse>>>>;
 
 #[tokio::main]
 async fn main()->Result<()>{
@@ -48,7 +55,7 @@ async fn main()->Result<()>{
                     // println!("{:?}",events);
 
                     match events{
-                        EngineEvents::Order_Status(status_vec)=>{
+                        EngineEvents::OrderStatus(status_vec)=>{
                             for e in status_vec{
                                 //     here we will compute for the events 
                                 //     since orderstatus contains the matcher id and user id the corresponding price
@@ -65,11 +72,21 @@ async fn main()->Result<()>{
             
                                     let os=e;
             
-                                    out_txn.send(e).await;
+                                    out_txn.send(TradeResponse::OrderStatus(os)).await;
                                 }
                         },
-                        EngineEvents::Canceled_Order()=>{
+                        EngineEvents::CanceledOrder(cancel_order_status)=>{
                             //todo
+                            let user_id=cancel_order_status.user_id;
+                            let out_txn={
+                                let map=map_clone.lock().unwrap();
+                                map.get(&user_id).unwrap().clone()
+                            };
+    
+                            // let os=e;
+    
+                            out_txn.send(TradeResponse::CancelledOrder(cancel_order_status)).await;
+
                         }
                     }
 

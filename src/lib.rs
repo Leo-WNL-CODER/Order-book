@@ -123,16 +123,17 @@ struct Event{
 
 #[derive(Debug)]
 pub struct CancelOrderStatus{
-    order_id:u64,
-    user_id:u64,
-    qnt:u64,
-    price:u64
+    pub order_id:u64,
+    pub user_id:u64,
+    pub qnt:u64,
+    pub price:u64,
+    pub order_type:OrderType
 }
 
 #[derive(Debug)]
 pub enum EngineEvents{
-    Order_Status(Vec<OrderStatus1>),
-    Canceled_Order(String)
+    OrderStatus(Vec<OrderStatus1>),
+    CanceledOrder(CancelOrderStatus)
 }
 
 
@@ -231,6 +232,9 @@ impl LimitOrderBook {
 
         let node = self.orders_pool[loc.index];
         let qty = node.order.order_metadata.quantity;
+        let user_id=node.order.order_metadata.user_id;
+        let price=loc.price;
+        let order_type=loc.order_type;
 
         // Unlink from Doubly Linked List
         if let Some(prev) = node.prev {
@@ -280,9 +284,13 @@ impl LimitOrderBook {
         // */
 
         let cancel_o_s=CancelOrderStatus{
-
-        }
-        Ok(())
+            order_id,
+            user_id,
+            qnt:qty,
+            price,
+            order_type
+        };
+        Ok(cancel_o_s)
     }
 
     //this fn returns the current id i.e. the number which is currently stored for the current order
@@ -554,14 +562,15 @@ impl LimitOrderBook {
                     order_detail.user_id);
 
                 self.execute_order(order_detail.price,&mut order_meta).map(
-                    |od|EngineEvents::Order_Status(od)
+                    |od|EngineEvents::OrderStatus(od)
                 )
             },
 
-            EngineRequest::Cancel{order_id,user_id}=>{
+            EngineRequest::Cancel{order_id,user_id:_}=>{
                 
                 self.cancel_order(order_id).map(
-                    |_|EngineEvents::Canceled_Order(String::from("Successfully cancelled")))
+                    |cancel_order_status|
+                    EngineEvents::CanceledOrder(cancel_order_status))
                 
             }
         }

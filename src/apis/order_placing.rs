@@ -42,7 +42,7 @@ async fn handle_socket(
     state: Arc<UserState>,
 ){
 
-    let (out_tx,mut out_recv)=mpsc::channel::<OrderStatus1>(1000);
+    let (out_tx,mut out_recv)=mpsc::channel::<UserRequest>(1000);
     let (mut sender, mut receiver) = socket.split();
     tokio::spawn(async move{
         while let Some(m)=out_recv.recv().await{
