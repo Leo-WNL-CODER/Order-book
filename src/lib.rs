@@ -24,7 +24,7 @@ pub struct OrderStatus {
     pub order_meta:OrderMetadata
 }
 
-#[derive( Debug, Clone, Copy,Serialize)]
+#[derive( Debug, Clone, Copy,Serialize,Deserialize)]
 pub struct OrderStatus1 {
     pub match_id:u64,
     pub match_price:u64,
@@ -42,7 +42,7 @@ pub enum OrderType {
     SELL,
 }
 
-#[derive(Debug, Clone, Copy,Serialize)]
+#[derive(Debug, Clone, Copy,Serialize,Deserialize)]
 pub struct  OrderMetadata {
     pub quantity: u64,
     pub order_type: OrderType,
@@ -121,7 +121,7 @@ struct Event{
     filled_qnt:u64
 }
 
-#[derive(Debug)]
+#[derive(Debug,Serialize,Deserialize)]
 pub struct CancelOrderStatus{
     pub order_id:u64,
     pub user_id:u64,
@@ -136,14 +136,16 @@ pub enum EngineEvents{
     CanceledOrder(CancelOrderStatus)
 }
 
+#[derive(Debug,Serialize,Deserialize)]
+pub struct CancelOrder{
+    pub order_id:u64,
+    pub user_id:u64
+}
 
 #[derive(Debug)]
 pub enum EngineRequest{
     Place(OrderDetails),
-    Cancel{
-        order_id:u64,
-        user_id:u64,
-    }
+    Cancel(CancelOrder)
 }
 
 #[derive(Debug,Clone)]
@@ -566,9 +568,9 @@ impl LimitOrderBook {
                 )
             },
 
-            EngineRequest::Cancel{order_id,user_id:_}=>{
+            EngineRequest::Cancel(cancel_order)=>{
                 
-                self.cancel_order(order_id).map(
+                self.cancel_order(cancel_order.order_id).map(
                     |cancel_order_status|
                     EngineEvents::CanceledOrder(cancel_order_status))
                 

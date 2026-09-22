@@ -5,6 +5,7 @@ use std::{collections::HashMap, net::TcpListener, sync::{Arc, Mutex}};
 use anyhow::Result;
 use axum::{Router, routing::{post,get}};
 use order_book::{CancelOrderStatus, EngineEvents, EngineRequest, LimitOrderBook, OrderDetails, OrderStatus, OrderStatus1};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{ mpsc::{self, Sender}};
 
 use crate::apis::order_placing::{UserRequest, place_order};
@@ -21,7 +22,7 @@ pub struct UserState{
     map:Arc<Mutex<HashMap<u64,Sender<TradeResponse>>>>
 }
 
-#[derive(Debug)]
+#[derive(Debug,Deserialize,Serialize)]
 pub enum TradeResponse{
     OrderStatus(OrderStatus1),
     CancelledOrder(CancelOrderStatus)

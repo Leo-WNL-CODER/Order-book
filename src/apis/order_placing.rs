@@ -3,14 +3,14 @@ use std::sync::Arc;
 use axum::{Json, body, extract::{State, WebSocketUpgrade, ws::{WebSocket,Message}}, response::{IntoResponse, Response}};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
-use order_book::{EngineRequest, OrderDetails, OrderStatus, OrderStatus1, OrderType};
+use order_book::{ CancelOrder, EngineRequest, OrderDetails, OrderStatus, OrderStatus1, OrderType};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use crate::{UserState, apis::order_placing::EngineRequest::{Cancel, Place}};
+use crate::{TradeResponse, UserState,};
  
 
-#[derive(Debug,Deserialize)]
+#[derive(Debug,Serialize,Deserialize)]
 pub struct UserPayload{
     pub order_qnt:u64,
     pub price:u64,
@@ -19,13 +19,17 @@ pub struct UserPayload{
     pub user_id: u64,
 }
 
-#[derive(Debug,Deserialize)]
+
+// #[derive(Debug,Serialize,Deserialize)]
+// pub struct CancelOrder{
+//     order_id:u64,
+//     user_id:u64
+// }
+
+#[derive(Debug,Serialize,Deserialize)]
 pub enum UserRequest{
     Place(UserPayload),
-    Cancel{
-        order_id:u64,
-        user_id:u64
-    }
+    Cancel(CancelOrder)
 }
 
 pub async fn place_order(ws:WebSocketUpgrade,State(state):State<Arc<UserState>>,
@@ -41,14 +45,23 @@ async fn handle_socket(
     mut socket: WebSocket,
     state: Arc<UserState>,
 ){
-
-    let (out_tx,mut out_recv)=mpsc::channel::<UserRequest>(1000);
+    let (out_tx,mut out_recv)=mpsc::channel::<TradeResponse>(1000);
     let (mut sender, mut receiver) = socket.split();
+    
     tokio::spawn(async move{
         while let Some(m)=out_recv.recv().await{
-            if let Ok(serialized)=serde_json::to_string::<OrderStatus1>(&m){
-                
-                sender.send(Message::Text(serialized.into())).await;
+
+            match m{
+                TradeResponse::OrderStatus(order_status)=>{
+                    if let Ok(serialized) = serde_json::to_string(&order_status){
+                        sender.send(Message::Text(serialized.into())).await;
+                    }
+                },
+                TradeResponse::CancelledOrder(cancel_order)=>{
+                    if let Ok(serialized) = serde_json::to_string(&cancel_order){
+                        sender.send(Message::Text(serialized.into())).await;
+                    }
+                },
             }
         }
     });
@@ -62,7 +75,7 @@ async fn handle_socket(
                 if let Ok(request)=serde_json::from_str::<UserRequest>(p_to_string){
                     
                     match request{
-                        Place(payload)=>{
+                        UserRequest::Place(payload)=>{
                             let order_type=payload.order_type;
                             let time=Utc::now();
                             let order_details=OrderDetails{
@@ -80,8 +93,14 @@ async fn handle_socket(
                             }
                             new_txn.send(EngineRequest::Place((order_details))).await;
                         },
-                        Cancel{order_id,user_id}=>{
-
+                        UserRequest::Cancel(cancel_order)=>{
+                            let new_txn=state.txn.clone();
+                            {
+                            let mut map=state.map.lock().unwrap();
+                            map.insert(cancel_order.user_id, out_tx.clone());
+                            }
+                            new_txn.send(EngineRequest::Cancel(cancel_order)).await;
+                        
                         },
                         _=>{
 
