@@ -113,13 +113,13 @@ pub enum CustomError {
 }
 
 
-#[derive(Debug)]
-struct Event{
-    user_id:u64,
-    match_id:u64,
-    price:u64,
-    filled_qnt:u64
-}
+// #[derive(Debug)]
+// struct Event{
+//     user_id:u64,
+//     match_id:u64,
+//     price:u64,
+//     filled_qnt:u64
+// }
 
 #[derive(Debug,Serialize,Deserialize)]
 pub struct CancelOrderStatus{
@@ -542,13 +542,7 @@ impl LimitOrderBook {
             }
         }
 
-        let total=initial_order_meta.quantity;
-        let order_status=OrderStatus{
-            total,
-            filled:total-remaining_qty,
-            remaining:remaining_qty,
-            order_meta:initial_order_meta
-        };
+       
         Ok(events)
     }
 
