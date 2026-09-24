@@ -113,14 +113,6 @@ pub enum CustomError {
 }
 
 
-// #[derive(Debug)]
-// struct Event{
-//     user_id:u64,
-//     match_id:u64,
-//     price:u64,
-//     filled_qnt:u64
-// }
-
 #[derive(Debug,Serialize,Deserialize)]
 pub struct CancelOrderStatus{
     pub order_id:u64,

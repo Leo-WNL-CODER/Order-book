@@ -20,11 +20,6 @@ pub struct UserPayload{
 }
 
 
-// #[derive(Debug,Serialize,Deserialize)]
-// pub struct CancelOrder{
-//     order_id:u64,
-//     user_id:u64
-// }
 
 #[derive(Debug,Serialize,Deserialize)]
 pub enum UserRequest{
